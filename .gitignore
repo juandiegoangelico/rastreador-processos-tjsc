@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+tests_tmp/
+.DS_Store
+relatorios/tjsc_rastreabilidade_*.csv
+relatorios/tjsc_rastreabilidade_*.json

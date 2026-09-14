@@ -1,0 +1,3 @@
+# Rastreador de Processos TJSC
+# O projeto utiliza a biblioteca padrão do Python 3 (urllib, ssl, re, json, csv, dataclasses).
+# Nenhuma dependência externa obrigatória é necessária.
