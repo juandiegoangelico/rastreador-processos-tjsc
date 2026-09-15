@@ -2,10 +2,7 @@
 Módulo para coleta e extração de dados do Eproc 2G do TJSC:
 https://eprocwebcon.tjsc.jus.br/consulta2g/externo_controlador.php?acao=consultaPublica/sessoesDeJulgamento
 
-Gerencia:
-- Busca de sessões por período e órgão julgador
-- Extração de Pautas (Processos Pautados, Mesa e Sustentações)
-- Extração e parsing de Atas de Julgamento
+Especializado na busca de sessões colegiadas e extração de Revisões Criminais.
 """
 
 import json
@@ -17,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from config import URL_EPROC_BASE, URL_EPROC_SESSOES, DEFAULT_HEADERS
-from classifier import ProcessoJulgado, parse_ata_html
+from classifier import RevisaoCriminal, parse_ata_revisao_criminal
 
 
 @dataclass
@@ -30,8 +27,7 @@ class SessaoJulgamento:
     url_pauta: str = ""
     url_ata: str = ""
     possui_ata: bool = False
-    processos: List[ProcessoJulgado] = field(default_factory=list)
-    processos_pauta_simples: List[Dict[str, Any]] = field(default_factory=list)
+    revisoes_criminais: List[RevisaoCriminal] = field(default_factory=list)
 
 
 class EprocScraper:
@@ -50,7 +46,6 @@ class EprocScraper:
         return urllib.request.Request(url, data=data, headers=h)
 
     def _update_cookies(self, response_headers) -> None:
-        """Salva cookies retornados para manter a sessão ativa."""
         cookies = response_headers.get_all("Set-Cookie") or []
         for c in cookies:
             partes = c.split(";")[0].split("=", 1)
@@ -58,7 +53,6 @@ class EprocScraper:
                 self.cookie_jar[partes[0].strip()] = partes[1].strip()
 
     def fetch_url(self, url: str, data: Optional[bytes] = None, extra_headers: Optional[Dict[str, str]] = None) -> str:
-        """Executa requisição GET ou POST com tratamento de cookies e charset."""
         if not url.startswith("http"):
             url = urllib.parse.urljoin(URL_EPROC_BASE, url)
 
@@ -67,7 +61,6 @@ class EprocScraper:
             with urllib.request.urlopen(req, context=self.ssl_context, timeout=self.timeout) as resp:
                 self._update_cookies(resp.headers)
                 raw = resp.read()
-                # Tenta ISO-8859-1 (padrão do eproc) e depois UTF-8
                 try:
                     return raw.decode("iso-8859-1")
                 except UnicodeDecodeError:
@@ -82,7 +75,6 @@ class EprocScraper:
         data_termino: str = "",
         id_orgao: str = ""
     ) -> List[SessaoJulgamento]:
-        """Consulta as sessões de julgamento no Eproc para o período indicado."""
         post_data = urllib.parse.urlencode({
             "numIdOrgao": id_orgao,
             "txtDataInicio": data_inicio,
@@ -91,36 +83,29 @@ class EprocScraper:
 
         html = self.fetch_url(URL_EPROC_SESSOES, data=post_data)
         if not html:
-            # Fallback para GET inicial
             html = self.fetch_url(URL_EPROC_SESSOES)
 
         return self._parse_tabela_sessoes(html)
 
     def _parse_tabela_sessoes(self, html: str) -> List[SessaoJulgamento]:
-        """Faz o parsing das linhas da tabela de sessões do Eproc."""
         sessoes: List[SessaoJulgamento] = []
 
-        # Localiza as linhas da tabela
         linhas = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
         for linha in linhas:
             colunas = re.findall(r'<td[^>]*>(.*?)</td>', linha, re.DOTALL | re.IGNORECASE)
             if len(colunas) < 4:
                 continue
 
-            # Coluna 1: Período / Data
             periodo = re.sub(r'<[^>]+>', ' ', colunas[0])
             periodo = re.sub(r'\s+', ' ', periodo).strip()
 
-            # Coluna 2: Tipo de Sessão
             tipo_sessao = re.sub(r'<[^>]+>', ' ', colunas[1])
             tipo_sessao = re.sub(r'\s+', ' ', tipo_sessao).strip()
 
-            # Coluna 3: Órgão e Magistrados
             orgao_bloco = colunas[2]
             m_orgao = re.search(r'<span[^>]*font-weight-bold[^>]*>([^<]+)</span>', orgao_bloco)
             orgao_nome = m_orgao.group(1).strip() if m_orgao else ""
 
-            # Extrai magistrados
             magistrados = []
             mag_limpo = re.sub(r'<span[^>]*>.*?</span>', '', orgao_bloco, flags=re.DOTALL)
             for m in re.split(r'<br\s*/?>', mag_limpo):
@@ -131,14 +116,10 @@ class EprocScraper:
             if not orgao_nome:
                 orgao_nome = "Órgão Não Identificado"
 
-            # Coluna 4: Ações (Pauta e Ata)
             acoes_bloco = colunas[3]
-
-            # Link da Pauta
             m_pauta = re.search(r'href=["\']([^"\']*listar_itens[^"\']*)["\']', acoes_bloco)
             url_pauta = m_pauta.group(1) if m_pauta else ""
 
-            # Link da Ata (geralmente dentro de showPautaSessaoJulgamento)
             m_ata = re.search(
                 r'showPautaSessaoJulgamento\([\'"]([^\'"]*sessao_julgamento_relatorio_ata[^\'"]*)[\'"]\)',
                 acoes_bloco
@@ -149,7 +130,6 @@ class EprocScraper:
             url_ata = m_ata.group(1) if m_ata else ""
             possui_ata = bool(url_ata and "hash=" in url_ata)
 
-            # Extrai ID da Sessão
             m_idsessao = re.search(r'idsessao=([0-9]+)', url_pauta)
             if not m_idsessao and url_ata:
                 m_idsessao = re.search(r'id_sessao_julgamento=([0-9]+)', url_ata)
@@ -170,8 +150,8 @@ class EprocScraper:
 
         return sessoes
 
-    def carregar_processos_da_ata(self, sessao: SessaoJulgamento) -> List[ProcessoJulgado]:
-        """Baixa e processa os dados de uma Ata de Julgamento concluída."""
+    def carregar_revisoes_criminais_da_ata(self, sessao: SessaoJulgamento) -> List[RevisaoCriminal]:
+        """Baixa e extrai exclusivamente os processos de Revisão Criminal da Ata."""
         if not sessao.url_ata:
             return []
 
@@ -180,45 +160,11 @@ class EprocScraper:
         if not html_ata:
             return []
 
-        processos = parse_ata_html(
+        revisoes = parse_ata_revisao_criminal(
             html=html_ata,
             orgao_julgador=sessao.orgao_julgador,
             data_sessao=sessao.periodo_data,
             tipo_sessao=sessao.tipo_sessao
         )
-        sessao.processos = processos
-        return processos
-
-    def carregar_processos_da_pauta(self, sessao: SessaoJulgamento, max_itens: int = 100) -> List[Dict[str, Any]]:
-        """Carrega os processos pautados via DataTables AJAX para sessões futuras ou sem ata."""
-        if not sessao.id_sessao:
-            return []
-
-        endpoint = (
-            f"{URL_EPROC_BASE}externo_controlador.php?"
-            f"acao=consulta_publica/sessao_julgamento/listar_itens_datatables&"
-            f"acao_origem=consulta_publica/sessao_julgamento/listar_itens"
-        )
-        post_data = urllib.parse.urlencode({
-            "idSessao": sessao.id_sessao,
-            "draw": "1",
-            "start": "0",
-            "length": str(max_itens)
-        }).encode("utf-8")
-
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-        }
-
-        raw_json = self.fetch_url(endpoint, data=post_data, extra_headers=headers)
-        if not raw_json:
-            return []
-
-        try:
-            data = json.loads(raw_json)
-            itens = data.get("data", [])
-            sessao.processos_pauta_simples = itens
-            return itens
-        except json.JSONDecodeError:
-            return []
+        sessao.revisoes_criminais = revisoes
+        return revisoes

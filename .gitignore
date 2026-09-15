@@ -3,5 +3,6 @@ __pycache__/
 *.pyo
 tests_tmp/
 .DS_Store
-relatorios/tjsc_rastreabilidade_*.csv
-relatorios/tjsc_rastreabilidade_*.json
+relatorio_teste.*
+relatorios/*
+!relatorios/.gitkeep

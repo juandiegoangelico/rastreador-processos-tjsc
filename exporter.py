@@ -1,114 +1,84 @@
 """
-Módulo de Exportação e Relatórios.
+Módulo de Exportação para o Rastreador de Revisões Criminais do TJSC.
 Gera saídas em:
-- CSV (compatível com Excel com codificação utf-8-sig)
+- CSV (com acentuação correta para Excel em utf-8-sig)
 - JSON estruturado
-- Relatório HTML visual interativo (autossuficiente, com busca e filtros)
+- Relatório HTML / Dashboard para o GitHub Pages (em docs/index.html)
 """
 
 import csv
 import json
 import os
 from typing import List, Dict, Any
-from classifier import ProcessoJulgado, TIPO_DATIVO, TIPO_DPE, TIPO_SEM_ADVOGADO
+from classifier import RevisaoCriminal, STATUS_SEM_ADVOGADO, STATUS_DATIVO, STATUS_DPE, STATUS_CONSTITUIDO
 
 
 class Exporter:
     @staticmethod
-    def export_csv(processos: List[ProcessoJulgado], filepath: str) -> str:
-        """Gera arquivo CSV com os processos rastreados."""
+    def export_csv(revisoes: List[RevisaoCriminal], filepath: str) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow([
                 "Numero_Processo",
-                "Classe_Processual",
+                "Nome_Sentenciado",
+                "Status_Defesa",
+                "Comarca_Origem",
                 "Orgao_Julgador",
                 "Data_Sessao",
                 "Tipo_Sessao",
-                "Categorias",
-                "Partes",
-                "Representantes",
-                "Detalhes_Classificacao",
-                "Decisao_Dispositivo",
+                "Justificativa_Defesa",
+                "Decisao_Colegiada",
                 "Link_Eproc"
             ])
 
-            for p in processos:
-                partes_txt = " | ".join([f"{parte.tipo}: {parte.nome}" for parte in p.partes])
-                reps_txt = []
-                for parte in p.partes:
-                    for r in parte.representantes:
-                        reps_txt.append(f"{r.tipo}: {r.nome}")
-                reps_str = " | ".join(reps_txt) if reps_txt else "Sem representante cadastrado"
-
-                detalhes_arr = []
-                if TIPO_DATIVO in p.categorias:
-                    motivos = p.detalhes_classificacao.get("motivos_dativo", [])
-                    trechos = [m.get("trecho") or m.get("detalhe", "") for m in motivos]
-                    detalhes_arr.append("Dativo: " + "; ".join(trechos[:2]))
-                if TIPO_DPE in p.categorias:
-                    dpes = [f"{d.get('representante')} ({d.get('parte')})" for d in p.detalhes_classificacao.get("defensores_dpe", [])]
-                    detalhes_arr.append("DPE: " + "; ".join(dpes))
-                if TIPO_SEM_ADVOGADO in p.categorias:
-                    sem = [f"{s.get('tipo')} {s.get('nome')}" for s in p.detalhes_classificacao.get("partes_sem_advogado", [])]
-                    detalhes_arr.append("Sem Advogado: " + "; ".join(sem))
+            for r in revisoes:
+                just = r.detalhes_defesa.get("justificativa", "")
+                if r.status_defesa == STATUS_DATIVO and r.detalhes_defesa.get("trecho_decisao_dativo"):
+                    just += f" ({r.detalhes_defesa['trecho_decisao_dativo']})"
 
                 writer.writerow([
-                    p.numero_processo,
-                    p.classe_processual,
-                    p.orgao_julgador,
-                    p.data_sessao,
-                    p.tipo_sessao,
-                    ", ".join(p.categorias),
-                    partes_txt,
-                    reps_str,
-                    " // ".join(detalhes_arr),
-                    p.decisao[:300] + ("..." if len(p.decisao) > 300 else ""),
-                    p.link_processo
+                    r.numero_processo,
+                    r.nome_sentenciado,
+                    r.status_defesa,
+                    r.comarca_origem,
+                    r.orgao_julgador,
+                    r.data_sessao,
+                    r.tipo_sessao,
+                    just,
+                    r.decisao[:300] + ("..." if len(r.decisao) > 300 else ""),
+                    r.link_processo
                 ])
 
         return filepath
 
     @staticmethod
-    def export_json(processos: List[ProcessoJulgado], filepath: str, cancelamentos: List[Dict[str, Any]] = None) -> str:
-        """Gera arquivo JSON estruturado contendo processos e dados complementares."""
+    def export_json(revisoes: List[RevisaoCriminal], filepath: str, cancelamentos: List[Dict[str, Any]] = None) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         dados = {
-            "total_processos": len(processos),
+            "total_revisoes": len(revisoes),
             "estatisticas": {
-                "dativo": sum(1 for p in processos if TIPO_DATIVO in p.categorias),
-                "dpe": sum(1 for p in processos if TIPO_DPE in p.categorias),
-                "sem_advogado": sum(1 for p in processos if TIPO_SEM_ADVOGADO in p.categorias),
+                "sem_advogado_constituido": sum(1 for r in revisoes if r.status_defesa == STATUS_SEM_ADVOGADO),
+                "dativo_nomeado": sum(1 for r in revisoes if r.status_defesa == STATUS_DATIVO),
+                "dpe": sum(1 for r in revisoes if r.status_defesa == STATUS_DPE),
+                "advogado_constituido": sum(1 for r in revisoes if r.status_defesa == STATUS_CONSTITUIDO),
             },
             "cancelamentos_tjsc": cancelamentos or [],
             "processos": [
                 {
-                    "numero_processo": p.numero_processo,
-                    "classe_processual": p.classe_processual,
-                    "origem": p.origem,
-                    "seq_pauta": p.seq_pauta,
-                    "orgao_julgador": p.orgao_julgador,
-                    "data_sessao": p.data_sessao,
-                    "tipo_sessao": p.tipo_sessao,
-                    "categorias": p.categorias,
-                    "detalhes_classificacao": p.detalhes_classificacao,
-                    "partes": [
-                        {
-                            "polo": pt.polo,
-                            "tipo": pt.tipo,
-                            "nome": pt.nome,
-                            "representantes": [
-                                {"tipo": r.tipo, "nome": r.nome, "oab_ou_orgao": r.oab_ou_orgao}
-                                for r in pt.representantes
-                            ]
-                        }
-                        for pt in p.partes
-                    ],
-                    "decisao": p.decisao,
-                    "link_processo": p.link_processo
+                    "numero_processo": r.numero_processo,
+                    "classe_processual": r.classe_processual,
+                    "nome_sentenciado": r.nome_sentenciado,
+                    "status_defesa": r.status_defesa,
+                    "comarca_origem": r.comarca_origem,
+                    "orgao_julgador": r.orgao_julgador,
+                    "data_sessao": r.data_sessao,
+                    "tipo_sessao": r.tipo_sessao,
+                    "detalhes_defesa": r.detalhes_defesa,
+                    "decisao": r.decisao,
+                    "link_processo": r.link_processo
                 }
-                for p in processos
+                for r in revisoes
             ]
         }
         with open(filepath, "w", encoding="utf-8") as f:
@@ -116,362 +86,529 @@ class Exporter:
         return filepath
 
     @staticmethod
-    def export_html(processos: List[ProcessoJulgado], filepath: str, cancelamentos: List[Dict[str, Any]] = None) -> str:
-        """Gera relatório HTML moderno, interativo e autossuficiente."""
+    def export_html(revisoes: List[RevisaoCriminal], filepath: str, cancelamentos: List[Dict[str, Any]] = None) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
 
-        tot_dativo = sum(1 for p in processos if TIPO_DATIVO in p.categorias)
-        tot_dpe = sum(1 for p in processos if TIPO_DPE in p.categorias)
-        tot_sem_adv = sum(1 for p in processos if TIPO_SEM_ADVOGADO in p.categorias)
-        tot_total = len(processos)
+        tot_sem = sum(1 for r in revisoes if r.status_defesa == STATUS_SEM_ADVOGADO)
+        tot_dat = sum(1 for r in revisoes if r.status_defesa == STATUS_DATIVO)
+        tot_dpe = sum(1 for r in revisoes if r.status_defesa == STATUS_DPE)
+        tot_const = sum(1 for r in revisoes if r.status_defesa == STATUS_CONSTITUIDO)
+        tot_geral = len(revisoes)
 
-        # Converte lista para JSON seguro embutido
         dados_json = json.dumps([
             {
-                "num": p.numero_processo,
-                "classe": p.classe_processual,
-                "orgao": p.orgao_julgador,
-                "data": p.data_sessao,
-                "tipo": p.tipo_sessao,
-                "categorias": p.categorias,
-                "detalhes": p.detalhes_classificacao,
-                "partes": [
-                    {
-                        "polo": pt.polo,
-                        "tipo": pt.tipo,
-                        "nome": pt.nome,
-                        "reps": [f"{r.tipo}: {r.nome}" for r in pt.representantes]
-                    }
-                    for pt in p.partes
-                ],
-                "decisao": p.decisao,
-                "link": p.link_processo
+                "num": r.numero_processo,
+                "classe": r.classe_processual,
+                "sentenciado": r.nome_sentenciado,
+                "status": r.status_defesa,
+                "comarca": r.comarca_origem,
+                "orgao": r.orgao_julgador,
+                "data": r.data_sessao,
+                "tipo": r.tipo_sessao,
+                "detalhes": r.detalhes_defesa,
+                "decisao": r.decisao,
+                "link": r.link_processo
             }
-            for p in processos
+            for r in revisoes
         ], ensure_ascii=False)
 
-        cancelamentos_html = ""
-        if cancelamentos:
-            cancelamentos_html = "<div class='alerts-box'><h3>⚠️ Alterações e Cancelamentos Informados no Portal TJSC</h3><ul>"
-            for c in cancelamentos:
-                cancelamentos_html += f"<li><strong>{c.get('orgao_julgador')}</strong> ({c.get('sessao_original')}): {c.get('descricao_alteracao')}</li>"
-            cancelamentos_html += "</ul></div>"
+        cancelamentos_json = json.dumps(cancelamentos or [], ensure_ascii=False)
 
-        html_content = f"""<!DOCTYPE html>
+        template = """<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rastreabilidade de Processos - TJSC (Dativo / DPE / Sem Advogado)</title>
+    <title>TJSC • Rastreador de Revisões Criminais</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root {{
-            --bg-color: #0f172a;
-            --surface-color: #1e293b;
-            --surface-hover: #334155;
+        :root {
+            --bg: #0b0f19;
+            --surface: #151d30;
+            --surface-hover: #1c2742;
+            --border: #263353;
             --primary: #38bdf8;
+            --primary-glow: rgba(56, 189, 248, 0.15);
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
-            --badge-dativo: #a855f7;
-            --badge-dpe: #10b981;
             --badge-sem: #ef4444;
+            --badge-sem-bg: rgba(239, 68, 68, 0.15);
+            --badge-dativo: #c084fc;
+            --badge-dativo-bg: rgba(192, 132, 252, 0.15);
+            --badge-dpe: #34d399;
+            --badge-dpe-bg: rgba(52, 211, 153, 0.15);
             --badge-const: #64748b;
-            --border-color: #334155;
-        }}
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
             color: var(--text-main);
             padding: 24px;
             line-height: 1.5;
-        }}
-        header {{
-            margin-bottom: 24px;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 16px;
-        }}
-        h1 {{ font-size: 1.8rem; font-weight: 700; color: #fff; }}
-        p.subtitle {{ color: var(--text-muted); font-size: 0.95rem; margin-top: 4px; }}
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
             gap: 16px;
             margin-bottom: 24px;
-        }}
-        .stat-card {{
-            background: var(--surface-color);
-            padding: 16px;
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
-        }}
-        .stat-card .label {{ font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; }}
-        .stat-card .value {{ font-size: 1.9rem; font-weight: 700; margin-top: 4px; }}
-        .val-total {{ color: var(--primary); }}
-        .val-dativo {{ color: var(--badge-dativo); }}
-        .val-dpe {{ color: var(--badge-dpe); }}
-        .val-sem {{ color: var(--badge-sem); }}
-        .alerts-box {{
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid var(--badge-sem);
-            padding: 14px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .title-group h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 40%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .title-group p {
+            color: var(--text-muted);
             font-size: 0.9rem;
-        }}
-        .alerts-box h3 {{ color: #fca5a5; margin-bottom: 8px; font-size: 1rem; }}
-        .controls {{
+            margin-top: 4px;
+        }
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-main);
+        }
+        .btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--primary);
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #0b0f19;
+            border-color: var(--primary);
+        }
+        .btn-primary:hover {
+            background: #7dd3fc;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .stat-sem { color: var(--badge-sem); }
+        .stat-dativo { color: var(--badge-dativo); }
+        .stat-dpe { color: var(--badge-dpe); }
+        .stat-total { color: var(--primary); }
+        .controls-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 20px;
             display: flex;
             flex-wrap: wrap;
             gap: 12px;
-            margin-bottom: 18px;
             align-items: center;
-        }}
-        .search-input {{
+        }
+        .search-box {
             flex: 1;
             min-width: 280px;
-            padding: 10px 14px;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 10px 16px;
             border-radius: 8px;
-            background: var(--surface-color);
-            border: 1px solid var(--border-color);
+            background: var(--bg);
+            border: 1px solid var(--border);
             color: #fff;
-            font-size: 0.95rem;
-        }}
-        .filter-btn {{
-            background: var(--surface-color);
-            border: 1px solid var(--border-color);
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .search-box input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+        .filter-tabs {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
             color: var(--text-muted);
             padding: 8px 14px;
             border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
             cursor: pointer;
-            font-size: 0.9rem;
             transition: all 0.2s;
-        }}
-        .filter-btn.active {{
+        }
+        .tab-btn.active {
             background: var(--primary);
-            color: #0f172a;
-            font-weight: 600;
+            color: #0b0f19;
+            font-weight: 700;
             border-color: var(--primary);
-        }}
-        .table-wrapper {{
-            background: var(--surface-color);
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
+        }
+        .results-count {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            padding: 0 4px;
+        }
+        .table-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .table-responsive {
             overflow-x: auto;
-        }}
-        table {{
+        }
+        table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.875rem;
             text-align: left;
-        }}
-        th {{
-            background: #162032;
+        }
+        th {
+            background: #0f1626;
             color: var(--text-muted);
-            padding: 12px 14px;
+            padding: 14px 16px;
             font-weight: 600;
-            border-bottom: 1px solid var(--border-color);
-        }}
-        td {{
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
             vertical-align: top;
-        }}
-        tr:hover {{ background: rgba(255,255,255,0.02); }}
-        .badge {{
-            display: inline-block;
-            padding: 2px 8px;
+        }
+        tr:hover td {
+            background: rgba(255,255,255,0.015);
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
             border-radius: 6px;
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             font-weight: 700;
-            margin-right: 4px;
-            margin-bottom: 4px;
+            letter-spacing: 0.03em;
             text-transform: uppercase;
-        }}
-        .badge-dativo {{ background: rgba(168, 85, 247, 0.2); color: #d8b4fe; border: 1px solid var(--badge-dativo); }}
-        .badge-dpe {{ background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid var(--badge-dpe); }}
-        .badge-sem {{ background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid var(--badge-sem); }}
-        .badge-const {{ background: rgba(100, 116, 139, 0.2); color: #cbd5e1; }}
-        .proc-link {{
+        }
+        .badge-sem {
+            background: var(--badge-sem-bg);
+            color: var(--badge-sem);
+            border: 1px solid var(--badge-sem);
+        }
+        .badge-dativo {
+            background: var(--badge-dativo-bg);
+            color: var(--badge-dativo);
+            border: 1px solid var(--badge-dativo);
+        }
+        .badge-dpe {
+            background: var(--badge-dpe-bg);
+            color: var(--badge-dpe);
+            border: 1px solid var(--badge-dpe);
+        }
+        .badge-const {
+            background: rgba(100, 116, 139, 0.2);
+            color: #cbd5e1;
+        }
+        .proc-link {
             color: var(--primary);
             text-decoration: none;
+            font-weight: 700;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+            font-size: 0.92rem;
+        }
+        .proc-link:hover { text-decoration: underline; }
+        .copy-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.8rem;
+            padding: 2px 4px;
+        }
+        .copy-btn:hover { color: #fff; }
+        .sentenciado-nome {
+            font-size: 1rem;
             font-weight: 600;
-            font-family: monospace;
-            font-size: 0.95rem;
-        }}
-        .proc-link:hover {{ text-decoration: underline; }}
-        .snippet-box {{
-            margin-top: 6px;
+            color: #f1f5f9;
+        }
+        .comarca-origem {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .justificativa-box {
+            font-size: 0.8rem;
+            color: #cbd5e1;
             background: rgba(0,0,0,0.25);
             padding: 6px 10px;
             border-radius: 6px;
-            font-size: 0.8rem;
             border-left: 3px solid var(--primary);
-            color: #cbd5e1;
-        }}
-        .partes-list {{ font-size: 0.82rem; color: #cbd5e1; }}
-        .rep-item {{ color: #94a3b8; margin-left: 8px; }}
+            margin-top: 6px;
+        }
     </style>
 </head>
 <body>
-    <header>
-        <h1>TJSC • Rastreabilidade Processual de Julgamentos</h1>
-        <p class="subtitle">Monitoramento de processos com Advogado Dativo, Defensoria Pública (DPE) ou Polo Desacompanhado (Sem Advogado).</p>
-    </header>
+    <div class="container">
+        <header>
+            <div class="title-group">
+                <h1>⚖️ TJSC • Rastreador de Revisões Criminais</h1>
+                <p>Monitoramento de processos em fase de Revisão Criminal com foco em sentenciados sem advogado constituído.</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-primary" onclick="exportarCSV()">📥 Baixar Visão (CSV)</button>
+            </div>
+        </header>
 
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="label">Total Rastreados</div>
-            <div class="value val-total" id="stat-total">{tot_total}</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-label">Sem Advogado Constituído</span>
+                <span class="stat-value stat-sem">__TOT_SEM__</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Dativo Nomeado pelo TJ</span>
+                <span class="stat-value stat-dativo">__TOT_DAT__</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Defensoria Pública (DPE)</span>
+                <span class="stat-value stat-dpe">__TOT_DPE__</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Total de Revisões</span>
+                <span class="stat-value stat-total">__TOT_GERAL__</span>
+            </div>
         </div>
-        <div class="stat-card">
-            <div class="label">Advogado Dativo</div>
-            <div class="value val-dativo" id="stat-dativo">{tot_dativo}</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Defensoria Pública (DPE)</div>
-            <div class="value val-dpe" id="stat-dpe">{tot_dpe}</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Sem Advogado / Revel</div>
-            <div class="value val-sem" id="stat-sem">{tot_sem_adv}</div>
-        </div>
-    </div>
 
-    {cancelamentos_html}
+        <div class="controls-card">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Buscar por número CNJ, nome do sentenciado, comarca de condenação..." oninput="filtrar()">
+            </div>
+            <div class="filter-tabs">
+                <button class="tab-btn active" onclick="setFiltro('TODOS')">Todas as Revisões</button>
+                <button class="tab-btn" onclick="setFiltro('SEM_ADVOGADO')">🔴 Sem Advogado Constituído</button>
+                <button class="tab-btn" onclick="setFiltro('DATIVO')">🟣 Dativo Nomeado</button>
+                <button class="tab-btn" onclick="setFiltro('DPE')">🟢 DPE</button>
+            </div>
+        </div>
 
-    <div class="controls">
-        <input type="text" id="search-box" class="search-input" placeholder="Pesquisar por número do processo, parte, advogado, câmara..." oninput="filtrarDados()">
-        <button class="filter-btn active" onclick="setFiltro('TODOS')">Todos</button>
-        <button class="filter-btn" onclick="setFiltro('DATIVO')">Advogado Dativo ({tot_dativo})</button>
-        <button class="filter-btn" onclick="setFiltro('DPE')">DPE ({tot_dpe})</button>
-        <button class="filter-btn" onclick="setFiltro('SEM_ADVOGADO')">Sem Advogado ({tot_sem_adv})</button>
-    </div>
+        <div class="results-count" id="results-count">Exibindo processos...</div>
 
-    <div class="table-wrapper">
-        <table id="tbl-processos">
-            <thead>
-                <tr>
-                    <th style="width: 210px;">Processo</th>
-                    <th style="width: 140px;">Status / Categoria</th>
-                    <th style="width: 200px;">Órgão Julgador / Data</th>
-                    <th>Partes e Representantes</th>
-                    <th>Fundamentação / Decisão</th>
-                </tr>
-            </thead>
-            <tbody id="tbl-body">
-            </tbody>
-        </table>
+        <div class="table-card">
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 220px;">Processo</th>
+                            <th style="width: 280px;">Sentenciado (Requerente)</th>
+                            <th style="width: 170px;">Status da Defesa</th>
+                            <th style="width: 200px;">Órgão Julgador / Data</th>
+                            <th>Decisão / Dispositivo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
-        const processos = {dados_json};
-        let filtroAtivo = 'TODOS';
+        const revisoes = __DADOS_JSON__;
+        let filtroAtivo = "TODOS";
 
-        function renderBadges(categorias) {{
-            return categorias.map(c => {{
-                if (c === 'DATIVO') return '<span class="badge badge-dativo">Adv. Dativo</span>';
-                if (c === 'DPE') return '<span class="badge badge-dpe">DPE</span>';
-                if (c === 'SEM_ADVOGADO') return '<span class="badge badge-sem">Sem Advogado</span>';
-                return '<span class="badge badge-const">' + c + '</span>';
-            }}).join('');
-        }}
-
-        function setFiltro(tipo) {{
+        function setFiltro(tipo) {
             filtroAtivo = tipo;
-            document.querySelectorAll('.filter-btn').forEach(btn => {{
-                if (btn.textContent.toUpperCase().includes(tipo)) {{
-                    btn.classList.add('active');
-                }} else if (tipo === 'TODOS' && btn.textContent === 'Todos') {{
-                    btn.classList.add('active');
-                }} else {{
-                    btn.classList.remove('active');
-                }}
-            }});
-            filtrarDados();
-        }}
+            document.querySelectorAll(".tab-btn").forEach(btn => {
+                if ((tipo === "TODOS" && btn.textContent.includes("Todas")) ||
+                    (tipo === "SEM_ADVOGADO" && btn.textContent.includes("Sem Advogado")) ||
+                    (tipo === "DATIVO" && btn.textContent.includes("Dativo")) ||
+                    (tipo === "DPE" && btn.textContent.includes("DPE"))) {
+                    btn.classList.add("active");
+                } else {
+                    btn.classList.remove("active");
+                }
+            });
+            filtrar();
+        }
 
-        function filtrarDados() {{
-            const termo = document.getElementById('search-box').value.toLowerCase().trim();
-            const tbody = document.getElementById('tbl-body');
-            tbody.innerHTML = '';
+        function filtrar() {
+            const termo = document.getElementById("search-input").value.toLowerCase().trim();
+            const tbody = document.getElementById("table-body");
+            tbody.innerHTML = "";
 
-            const filtrados = processos.filter(p => {{
-                if (filtroAtivo !== 'TODOS' && !p.categorias.includes(filtroAtivo)) {{
-                    return false;
-                }}
+            const filtradas = revisoes.filter(r => {
+                if (filtroAtivo === "SEM_ADVOGADO" && r.status !== "SEM_ADVOGADO_CONSTITUIDO") return false;
+                if (filtroAtivo === "DATIVO" && r.status !== "DATIVO_NOMEADO") return false;
+                if (filtroAtivo === "DPE" && r.status !== "DPE") return false;
+
                 if (!termo) return true;
-
-                const textoBusca = (
-                    p.num + " " + p.classe + " " + p.orgao + " " +
-                    JSON.stringify(p.partes) + " " + JSON.stringify(p.detalhes) + " " + p.decisao
+                const texto = (
+                    (r.num || "") + " " +
+                    (r.sentenciado || "") + " " +
+                    (r.comarca || "") + " " +
+                    (r.orgao || "") + " " +
+                    (r.decisao || "")
                 ).toLowerCase();
-                return textoBusca.includes(termo);
-            }});
+                return texto.includes(termo);
+            });
 
-            if (filtrados.length === 0) {{
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 24px; color: var(--text-muted);">Nenhum processo correspondente aos filtros.</td></tr>';
+            document.getElementById("results-count").textContent = `Exibindo ${filtradas.length} de ${revisoes.length} revisões criminais.`;
+
+            if (filtradas.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 32px; color: var(--text-muted);">Nenhuma revisão criminal encontrada com os filtros selecionados.</td></tr>';
                 return;
-            }}
+            }
 
-            filtrados.forEach(p => {{
-                const tr = document.createElement('tr');
+            filtradas.forEach(r => {
+                const tr = document.createElement("tr");
 
-                // Formatação partes
-                let partesHtml = '<div class="partes-list">';
-                p.partes.forEach(pt => {{
-                    partesHtml += '<div><strong>' + pt.tipo + ':</strong> ' + pt.nome;
-                    if (pt.reps && pt.reps.length > 0) {{
-                        pt.reps.forEach(r => {{
-                            partesHtml += '<div class="rep-item">↳ ' + r + '</div>';
-                        }});
-                    }} else {{
-                        partesHtml += '<div class="rep-item" style="color: #fca5a5;">↳ [Sem advogado cadastrado]</div>';
-                    }}
-                    partesHtml += '</div>';
-                }});
-                partesHtml += '</div>';
+                let badgeHtml = "";
+                if (r.status === "SEM_ADVOGADO_CONSTITUIDO") {
+                    badgeHtml = '<span class="badge badge-sem">Sem Advogado</span>';
+                } else if (r.status === "DATIVO_NOMEADO") {
+                    badgeHtml = '<span class="badge badge-dativo">Dativo Nomeado</span>';
+                } else if (r.status === "DPE") {
+                    badgeHtml = '<span class="badge badge-dpe">DPE</span>';
+                } else {
+                    badgeHtml = '<span class="badge badge-const">Advogado Constituído</span>';
+                }
 
-                // Detalhes da fundamentação
-                let decisaoHtml = '';
-                if (p.detalhes && p.detalhes.motivos_dativo && p.detalhes.motivos_dativo.length > 0) {{
-                    const motivo = p.detalhes.motivos_dativo[0];
-                    const trecho = motivo.trecho || motivo.detalhe || '';
-                    decisaoHtml += '<div class="snippet-box" style="border-left-color: var(--badge-dativo);"><strong>Arbitramento Dativo:</strong> ' + trecho + '</div>';
-                }}
-                if (p.detalhes && p.detalhes.defensores_dpe && p.detalhes.defensores_dpe.length > 0) {{
-                    const d = p.detalhes.defensores_dpe[0];
-                    decisaoHtml += '<div class="snippet-box" style="border-left-color: var(--badge-dpe);"><strong>Atuação DPE:</strong> ' + d.representante + '</div>';
-                }}
-                if (p.decisao) {{
-                    decisaoHtml += '<div style="margin-top:6px; font-size:0.8rem; color:#94a3b8;">' + (p.decisao.length > 220 ? p.decisao.substring(0, 220) + '...' : p.decisao) + '</div>';
-                }}
+                let justHtml = "";
+                if (r.detalhes && r.detalhes.justificativa) {
+                    justHtml = `<div class="justificativa-box">${r.detalhes.justificativa}</div>`;
+                }
 
-                const linkHtml = p.link ? '<a class="proc-link" href="' + p.link + '" target="_blank">' + p.num + '</a>' : '<span class="proc-link">' + p.num + '</span>';
+                const linkHtml = r.link ?
+                    `<a class="proc-link" href="${r.link}" target="_blank">${r.num}</a>` :
+                    `<span class="proc-link">${r.num}</span>`;
 
                 tr.innerHTML = `
                     <td>
-                        ${{linkHtml}}
-                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${{p.classe}}</div>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            ${linkHtml}
+                            <button class="copy-btn" title="Copiar CNJ" onclick="copiar('${r.num}', this)">📋</button>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${r.classe}</div>
                     </td>
-                    <td>${{renderBadges(p.categorias)}}</td>
                     <td>
-                        <strong>${{p.orgao}}</strong>
-                        <div style="font-size:0.8rem; color:var(--text-muted);">${{p.data}}</div>
-                        <div style="font-size:0.75rem; color:#38bdf8;">${{p.tipo}}</div>
+                        <div class="sentenciado-nome">${r.sentenciado}</div>
+                        <div class="comarca-origem">📍 ${r.comarca}</div>
+                        ${justHtml}
                     </td>
-                    <td>${{partesHtml}}</td>
-                    <td>${{decisaoHtml}}</td>
+                    <td>${badgeHtml}</td>
+                    <td>
+                        <strong>${r.orgao}</strong>
+                        <div style="font-size:0.8rem; color:var(--text-muted);">${r.data}</div>
+                        <div style="font-size:0.72rem; color:var(--primary);">${r.tipo}</div>
+                    </td>
+                    <td>
+                        <div style="font-size:0.82rem; color:#cbd5e1;">${r.decisao ? (r.decisao.length > 250 ? r.decisao.substring(0, 250) + "..." : r.decisao) : "Dispositivo em processamento"}</div>
+                    </td>
                 `;
                 tbody.appendChild(tr);
-            }});
-        }}
+            });
+        }
 
-        // Renderização inicial
-        filtrarDados();
+        function copiar(texto, el) {
+            navigator.clipboard.writeText(texto).then(() => {
+                const orig = el.textContent;
+                el.textContent = "✔";
+                setTimeout(() => { el.textContent = orig; }, 1200);
+            });
+        }
+
+        function exportarCSV() {
+            const termo = document.getElementById("search-input").value.toLowerCase().trim();
+            const visiveis = revisoes.filter(r => {
+                if (filtroAtivo === "SEM_ADVOGADO" && r.status !== "SEM_ADVOGADO_CONSTITUIDO") return false;
+                if (filtroAtivo === "DATIVO" && r.status !== "DATIVO_NOMEADO") return false;
+                if (filtroAtivo === "DPE" && r.status !== "DPE") return false;
+                if (!termo) return true;
+                const texto = ((r.num||"") + " " + (r.sentenciado||"") + " " + (r.comarca||"") + " " + (r.decisao||"")).toLowerCase();
+                return texto.includes(termo);
+            });
+
+            let csv = "Numero_Processo;Sentenciado;Status_Defesa;Comarca_Origem;Orgao;Data_Sessao;Decisao;Link\\n";
+            visiveis.forEach(r => {
+                const dec = (r.decisao || "").replace(/\\r?\\n/g, " ").replace(/;/g, ",");
+                csv += `"${r.num}";"${r.sentenciado}";"${r.status}";"${r.comarca}";"${r.orgao}";"${r.data}";"${dec}";"${r.link}"\\n`;
+            });
+
+            const blob = new Blob(["\\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `revisoes_criminais_tjsc_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        window.onload = filtrar;
     </script>
 </body>
 </html>
 """
+        final_html = (
+            template
+            .replace("__TOT_SEM__", str(tot_sem))
+            .replace("__TOT_DAT__", str(tot_dat))
+            .replace("__TOT_DPE__", str(tot_dpe))
+            .replace("__TOT_GERAL__", str(tot_geral))
+            .replace("__DADOS_JSON__", dados_json)
+        )
+
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(html_content)
+            f.write(final_html)
+
+        # Salva também automaticamente na pasta docs/index.html para o GitHub Pages
+        docs_path = os.path.join(os.path.dirname(os.path.abspath(filepath)), "..", "docs", "index.html")
+        os.makedirs(os.path.dirname(docs_path), exist_ok=True)
+        with open(docs_path, "w", encoding="utf-8") as f:
+            f.write(final_html)
+
         return filepath
